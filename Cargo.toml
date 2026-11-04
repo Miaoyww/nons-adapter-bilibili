@@ -1,0 +1,29 @@
+[package]
+name = "nons-adapter-bilibili"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.95"
+license = "MIT"
+publish = false
+build = "build.rs"
+
+[package.metadata.component]
+package = "nons:bilibili"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde_json = { version = "1", features = ["preserve_order"] }
+md-5 = "0.10"
+url = "2"
+html-escape = "0.2"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wit-bindgen = "0.41"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+panic = "abort"

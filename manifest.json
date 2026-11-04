@@ -1,0 +1,31 @@
+{
+  "version": "0.1.0",
+  "descriptor": {
+    "source": "bilibili",
+    "displayName": "哔哩哔哩",
+    "description": "搜索并播放哔哩哔哩视频音轨，可为歌曲查找和播放 MV。",
+    "contractVersion": 1,
+    "platforms": ["bilibili"],
+    "capabilities": ["search", "mv"],
+    "coverHosts": ["*.hdslb.com", "*.biliimg.com"],
+    "shareLinkTemplates": {
+      "track": "https://www.bilibili.com/video/{id}"
+    }
+  },
+  "permissions": {
+    "httpHosts": [
+      "api.bilibili.com",
+      "*.hdslb.com",
+      "*.biliimg.com",
+      "*.bilivideo.com",
+      "*.bilivideo.cn",
+      "*.bilivideo.net",
+      "*.akamaized.net",
+      "*.szbdyd.com"
+    ],
+    "websocketHosts": [],
+    "system": true,
+    "state": true,
+    "credentials": false
+  }
+}

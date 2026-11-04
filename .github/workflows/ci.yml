@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    env:
+      NONS_ROOT: ${{ github.workspace }}/workspace
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: Miaoyww/Nons
+          path: workspace
+      - uses: actions/checkout@v4
+        with:
+          path: workspace/adapters/bilibili
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.95.0'
+          targets: wasm32-unknown-unknown
+      - name: Install cargo-component
+        run: cargo install cargo-component --version 0.21.1 --locked
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: workspace/adapters/bilibili -> target
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: workspace/packages/wasm-crypto/package-lock.json
+      - name: Install Component test dependencies
+        run: npm ci --prefix workspace/packages/wasm-crypto --include=dev
+      - name: Run Rust tests
+        run: cargo test --manifest-path workspace/adapters/bilibili/Cargo.toml
+      - name: Build and test Component
+        working-directory: workspace
+        run: |
+          node adapters/bilibili/scripts/build.mjs
+          node --test adapters/bilibili/tests/component.test.mjs
+      - name: Package release asset
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          mkdir -p workspace/out
+          (cd workspace/app/src-tauri/bundled-adapters/bilibili && zip -qr "../../../../out/bilibili-${GITHUB_REF_NAME}.zip" .)
+          (cd workspace/out && sha256sum *.zip > SHA256SUMS.txt)
+      - uses: actions/upload-artifact@v4
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          name: nons-adapter-bilibili-release
+          path: workspace/out/*
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: nons-adapter-bilibili-release
+          path: release
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" release/* --repo "${GITHUB_REPOSITORY}" --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" release/* --repo "${GITHUB_REPOSITORY}" --verify-tag --generate-notes
+          fi
