@@ -30,13 +30,18 @@ pub trait Host {
     fn state_get(&self, key: &str) -> Result<Option<String>>;
     fn state_set(&self, key: &str, value: &str) -> Result<()>;
     fn credential_read(&self) -> Result<Vec<u8>>;
+    fn credential_publish(&self, metadata: &str, data: &[u8]) -> Result<()>;
+    fn credential_replace(&self, data: &[u8]) -> Result<()>;
+    fn credential_invalidate(&self) -> Result<()>;
     fn diagnostic(&self, stage: &str, class: &str, code: &str);
 }
 
 #[derive(Default)]
-pub struct Adapter;
+pub struct Adapter {
+    login: Option<String>,
+}
 impl Adapter {
-    pub fn call(&self, host: &impl Host, method: &str, args: &str) -> String {
+    pub fn call(&mut self, host: &impl Host, method: &str, args: &str) -> String {
         let result = self.dispatch(host, method, args).and_then(|value| {
             let encoded = json!({"status":"ok","data":value}).to_string();
             if encoded.len() > MAX_JSON {
@@ -53,7 +58,7 @@ impl Adapter {
             }
         }
     }
-    fn dispatch(&self, host: &impl Host, method: &str, args: &str) -> Result<Value> {
+    fn dispatch(&mut self, host: &impl Host, method: &str, args: &str) -> Result<Value> {
         if args.len() > MAX_JSON {
             return Err(model::Error::new("invalidData", "transport.args-size"));
         }
@@ -69,6 +74,11 @@ impl Adapter {
         }
         let request = &input["request"];
         match method {
+            "music.prepare-login" => {
+                api::prepare_login(request)?;
+                Ok(Value::Null)
+            }
+            "music.account" => api::account(host, &mut self.login, request),
             "music.read-track" => api::read_track(host, request),
             "music.business" => {
                 if request["operation"] != "search" || request["kind"] != "track" {

@@ -1,4 +1,5 @@
 use crate::{model::*, wbi, Host};
+use base64::Engine as _;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
@@ -7,6 +8,8 @@ const MOBILE_UA: &str =
 const WEB_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0";
 const REFERER: &str = "https://www.bilibili.com/";
 const ORIGIN: &str = "https://www.bilibili.com";
+const PASSPORT: &str = "https://passport.bilibili.com";
+const API: &str = "https://api.bilibili.com";
 
 fn cookie(host: &impl Host) -> String {
     host.credential_read()
@@ -42,6 +45,180 @@ fn get(
     };
     let reply = host.http("GET", &url, headers, vec![], 10_000)?;
     response(reply.status, &reply.body)
+}
+
+fn raw_get(host: &impl Host, url: &str, headers: Vec<(String, String)>) -> Result<crate::Response> {
+    host.http("GET", url, headers, vec![], 10_000)
+}
+
+pub fn prepare_login(request: &Value) -> Result<()> {
+    match request["method"].as_str().unwrap_or("qr") {
+        "qr" => Ok(()),
+        _ => Err(Error::new("unsupported", "account.login-method")),
+    }
+}
+
+fn login_cookie(headers: &[(String, String)]) -> Result<String> {
+    let mut values = BTreeMap::new();
+    for (name, value) in headers {
+        if !name.eq_ignore_ascii_case("set-cookie") {
+            continue;
+        }
+        let Some((name, value)) = value
+            .split_once(';')
+            .unwrap_or((value, ""))
+            .0
+            .split_once('=')
+        else {
+            continue;
+        };
+        let value = value.trim();
+        if name.is_empty()
+            || value.is_empty()
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+            || value
+                .bytes()
+                .any(|byte| byte.is_ascii_control() || byte == b';')
+        {
+            continue;
+        }
+        if matches!(
+            name,
+            "SESSDATA"
+                | "bili_jct"
+                | "DedeUserID"
+                | "DedeUserID__ckMd5"
+                | "sid"
+                | "buvid3"
+                | "buvid4"
+        ) {
+            values.insert(name, value);
+        }
+    }
+    if !values.contains_key("SESSDATA") || !values.contains_key("bili_jct") {
+        return Err(Error::new("unauthenticated", "account.login-cookie"));
+    }
+    Ok(values
+        .into_iter()
+        .map(|(name, value)| format!("{name}={value}"))
+        .collect::<Vec<_>>()
+        .join("; "))
+}
+
+fn profile(host: &impl Host, cookie_override: Option<&str>) -> Result<Option<Value>> {
+    let cookie = cookie_override
+        .map(str::to_owned)
+        .unwrap_or_else(|| cookie(host));
+    if cookie.is_empty() {
+        return Ok(None);
+    }
+    let reply = raw_get(
+        host,
+        &format!("{API}/x/space/myinfo"),
+        headers(host, &[("Cookie", &cookie)]),
+    )?;
+    let value = response(reply.status, &reply.body)?;
+    let code = value["code"].as_i64().unwrap_or(-1);
+    if code == -101 {
+        let _ = host.credential_invalidate();
+        return Ok(None);
+    }
+    let data = envelope(value, false)?;
+    if !integer(&data["mid"]).is_some_and(|mid| mid > 0) {
+        return Ok(None);
+    }
+    Ok(Some(data))
+}
+
+fn account_record(data: &Value) -> Result<Value> {
+    let mid = integer(&data["mid"])
+        .filter(|mid| *mid > 0)
+        .ok_or_else(|| Error::new("invalidData", "account.mid"))?;
+    let name = text(&data["name"]);
+    Ok(json!({
+        "reference": {"source":"bilibili","id":mid.to_string()},
+        "displayName": if name.is_empty() { mid.to_string() } else { name },
+        "avatar": cover(&data["face"])
+    }))
+}
+
+pub fn account(host: &impl Host, login: &mut Option<String>, request: &Value) -> Result<Value> {
+    match request["operation"].as_str().unwrap_or("") {
+        "beginLogin" => {
+            prepare_login(request)?;
+            let reply = raw_get(
+                host,
+                &format!("{PASSPORT}/x/passport-login/web/qrcode/generate"),
+                headers(host, &[]),
+            )?;
+            let data = envelope(response(reply.status, &reply.body)?, false)?;
+            let url = data["url"]
+                .as_str()
+                .filter(|url| url.starts_with("https://"))
+                .ok_or_else(|| Error::new("invalidData", "account.qr-url"))?;
+            let key = data["qrcode_key"]
+                .as_str()
+                .filter(|key| !key.is_empty() && key.len() <= 256)
+                .ok_or_else(|| Error::new("invalidData", "account.qr-key"))?;
+            let qr = qrcode::QrCode::new(url)
+                .map_err(|_| Error::new("invalidData", "account.qr-encode"))?;
+            let svg = qr
+                .render::<qrcode::render::svg::Color>()
+                .min_dimensions(224, 224)
+                .build();
+            let image = format!(
+                "data:image/svg+xml;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(svg)
+            );
+            if image.len() > 64 * 1024 {
+                return Err(Error::new("invalidData", "account.qr-size"));
+            }
+            *login = Some(key.to_owned());
+            Ok(json!({
+                "type":"challenge",
+                "data":{"key":key,"image":image}
+            }))
+        }
+        "pollLogin" => {
+            let key = request["key"].as_str().unwrap_or("");
+            if login.as_deref() != Some(key) {
+                return Err(Error::new("staleContext", "account.challenge"));
+            }
+            let reply = raw_get(
+                host,
+                &format!("{PASSPORT}/x/passport-login/web/qrcode/poll?qrcode_key={key}"),
+                vec![("User-Agent".into(), MOBILE_UA.into())],
+            )?;
+            let data = envelope(response(reply.status, &reply.body)?, false)?;
+            let status = data["code"].as_i64().unwrap_or(-1);
+            let (code, message) = match status {
+                86101 => (801, "等待扫码"),
+                86090 => (802, "已扫码，请在手机确认"),
+                86038 => (800, "二维码已过期"),
+                0 => (803, "登录成功"),
+                _ => (800, "登录状态异常"),
+            };
+            if status == 0 {
+                let cookie = login_cookie(&reply.headers)?;
+                let data = profile(host, Some(&cookie))?
+                    .ok_or_else(|| Error::new("unauthenticated", "account.profile"))?;
+                let record = account_record(&data)?;
+                host.credential_publish(&record.to_string(), cookie.as_bytes())?;
+                *login = None;
+            } else if status == 86038 {
+                *login = None;
+            }
+            Ok(json!({"type":"progress","data":{"code":code,"message":message}}))
+        }
+        "profile" => Ok(match profile(host, None)? {
+            Some(data) => json!({"type":"profile","data":account_record(&data)?}),
+            None => json!({"type":"profile","data":Value::Null}),
+        }),
+        "logout" => Err(Error::new("unsupported", "account.logout")),
+        _ => Err(Error::new("invalidData", "account.operation")),
+    }
 }
 
 fn nav(host: &impl Host) -> Result<Value> {
@@ -405,8 +582,23 @@ mod tests {
 
     #[derive(Default)]
     struct Fixture {
-        responses: RefCell<Vec<(u16, Value)>>,
+        responses: RefCell<Vec<Reply>>,
         state: RefCell<BTreeMap<String, String>>,
+        credential: RefCell<Vec<u8>>,
+        published: RefCell<Option<(String, Vec<u8>)>>,
+        invalidated: RefCell<bool>,
+    }
+    struct Reply {
+        status: u16,
+        headers: Vec<(String, String)>,
+        value: Value,
+    }
+    fn reply(value: Value) -> Reply {
+        Reply {
+            status: 200,
+            headers: vec![],
+            value,
+        }
     }
     impl Host for Fixture {
         fn http(
@@ -417,11 +609,11 @@ mod tests {
             _: Vec<u8>,
             _: u32,
         ) -> Result<Response> {
-            let (status, value) = self.responses.borrow_mut().remove(0);
+            let reply = self.responses.borrow_mut().remove(0);
             Ok(Response {
-                status,
-                headers: vec![],
-                body: value.to_string().into_bytes(),
+                status: reply.status,
+                headers: reply.headers,
+                body: reply.value.to_string().into_bytes(),
             })
         }
         fn now_ms(&self) -> u64 {
@@ -435,7 +627,19 @@ mod tests {
             Ok(())
         }
         fn credential_read(&self) -> Result<Vec<u8>> {
-            Ok(vec![])
+            Ok(self.credential.borrow().clone())
+        }
+        fn credential_publish(&self, metadata: &str, data: &[u8]) -> Result<()> {
+            *self.published.borrow_mut() = Some((metadata.into(), data.to_vec()));
+            Ok(())
+        }
+        fn credential_replace(&self, data: &[u8]) -> Result<()> {
+            *self.credential.borrow_mut() = data.to_vec();
+            Ok(())
+        }
+        fn credential_invalidate(&self) -> Result<()> {
+            *self.invalidated.borrow_mut() = true;
+            Ok(())
         }
         fn diagnostic(&self, _: &str, _: &str, _: &str) {}
     }
@@ -448,8 +652,8 @@ mod tests {
     fn selects_requested_audio_and_keeps_backup_urls() {
         let host = Fixture::default();
         host.responses.borrow_mut().extend([
-            (200, envelope(json!({"wbi_img":{"img_url":"https://i0.hdslb.com/a.png","sub_url":"https://i0.hdslb.com/b.png"}}))),
-            (200, envelope(json!({"dash":{"audio":[{"id":30280,"base_url":"https://upos.example/audio.m4s","backup_url":["https://backup.example/audio.m4s"]}]}}))),
+            reply(envelope(json!({"wbi_img":{"img_url":"https://i0.hdslb.com/a.png","sub_url":"https://i0.hdslb.com/b.png"}}))),
+            reply(envelope(json!({"dash":{"audio":[{"id":30280,"base_url":"https://upos.example/audio.m4s","backup_url":["https://backup.example/audio.m4s"]}]}}))),
         ]);
         let value = resolve_playback(
             &host,
@@ -464,8 +668,8 @@ mod tests {
     fn mv_prefers_avc_1080p_over_higher_codecs() {
         let host = Fixture::default();
         host.responses.borrow_mut().extend([
-            (200, envelope(json!({"wbi_img":{"img_url":"https://i0.hdslb.com/a.png","sub_url":"https://i0.hdslb.com/b.png"}}))),
-            (200, envelope(json!({"dash":{"video":[
+            reply(envelope(json!({"wbi_img":{"img_url":"https://i0.hdslb.com/a.png","sub_url":"https://i0.hdslb.com/b.png"}}))),
+            reply(envelope(json!({"dash":{"video":[
                 {"id":120,"codecid":13,"base_url":"https://example/4k.m4s"},
                 {"id":80,"codecid":7,"base_url":"https://example/1080.m4s"}
             ]}}))),
@@ -477,5 +681,110 @@ mod tests {
         .unwrap();
         assert_eq!(value["metadata"]["actualQuality"], "1080p");
         assert_eq!(value["url"], "https://example/1080.m4s");
+    }
+
+    #[test]
+    fn qr_login_publishes_cookie_only_after_profile_and_unwraps_account_record() {
+        let host = Fixture::default();
+        host.responses.borrow_mut().extend([
+            reply(envelope(json!({
+                "url":"https://www.bilibili.com/h5/mobile-appeal",
+                "qrcode_key":"qr-key"
+            }))),
+            reply(envelope(json!({"code":86090}))),
+            Reply {
+                status: 200,
+                headers: vec![
+                    (
+                        "set-cookie".into(),
+                        "SESSDATA=sess; Path=/; HttpOnly".into(),
+                    ),
+                    (
+                        "set-cookie".into(),
+                        "bili_jct=csrf; Path=/; HttpOnly".into(),
+                    ),
+                    (
+                        "set-cookie".into(),
+                        "DedeUserID=42; Path=/; HttpOnly".into(),
+                    ),
+                ],
+                value: envelope(json!({"code":0})),
+            },
+            reply(envelope(
+                json!({"mid":42,"name":"Listener","face":"//i0.hdslb.com/avatar.jpg"}),
+            )),
+        ]);
+        let mut login = None;
+        let challenge = account(
+            &host,
+            &mut login,
+            &json!({"operation":"beginLogin","method":"qr"}),
+        )
+        .unwrap();
+        assert_eq!(challenge["type"], "challenge");
+        assert_eq!(challenge["data"]["key"], "qr-key");
+        assert!(challenge["data"]["image"]
+            .as_str()
+            .unwrap()
+            .starts_with("data:image/svg+xml;base64,"));
+        let waiting = account(
+            &host,
+            &mut login,
+            &json!({"operation":"pollLogin","key":"qr-key"}),
+        )
+        .unwrap();
+        assert_eq!(waiting["data"]["code"], 802);
+        let success = account(
+            &host,
+            &mut login,
+            &json!({"operation":"pollLogin","key":"qr-key"}),
+        )
+        .unwrap();
+        assert_eq!(success["data"]["code"], 803);
+        let (metadata, credential) = host.published.borrow().clone().unwrap();
+        assert_eq!(credential, b"DedeUserID=42; SESSDATA=sess; bili_jct=csrf");
+        let record: Value = serde_json::from_str(&metadata).unwrap();
+        assert_eq!(record["reference"]["id"], "42");
+        assert_eq!(
+            record["avatar"]["original"],
+            "https://i0.hdslb.com/avatar.jpg"
+        );
+        assert!(login.is_none());
+    }
+
+    #[test]
+    fn profile_invalidates_rejected_cookie_and_returns_null() {
+        let host = Fixture::default();
+        *host.credential.borrow_mut() = b"SESSDATA=old; bili_jct=csrf".to_vec();
+        host.responses
+            .borrow_mut()
+            .push(reply(json!({"code":-101,"data":{"isLogin":false}})));
+        let mut login = None;
+        let profile = account(&host, &mut login, &json!({"operation":"profile"})).unwrap();
+        assert!(profile["data"].is_null());
+        assert!(*host.invalidated.borrow());
+    }
+
+    #[test]
+    fn login_cookie_requires_session_and_csrf_and_drops_attributes() {
+        let headers = vec![
+            (
+                "set-cookie".into(),
+                "SESSDATA=a%2Cb; Path=/; HttpOnly".into(),
+            ),
+            ("set-cookie".into(), "bili_jct=csrf; Path=/".into()),
+            (
+                "set-cookie".into(),
+                "DedeUserID=42; Expires=Wed, 04 Nov 2026 00:00:00 GMT".into(),
+            ),
+        ];
+        assert_eq!(
+            login_cookie(&headers).unwrap(),
+            "DedeUserID=42; SESSDATA=a%2Cb; bili_jct=csrf"
+        );
+        assert_eq!(
+            login_cookie(&headers[..1]).unwrap_err().code,
+            "unauthenticated"
+        );
     }
 }

@@ -34,11 +34,15 @@ const { WASIShim } = await import(
 async function component() {
   const requests = []
   const states = new Map()
+  let credential = new Uint8Array()
+  let published
+  let pollCount = 0
   const transport = {
     httpRequest(request) {
       requests.push(request)
       const url = new URL(request.url)
       let body
+      const headers = [{ name: 'content-type', value: 'application/json' }]
       if (url.pathname === '/x/web-interface/nav')
         body = {
           code: -101,
@@ -106,10 +110,33 @@ async function component() {
             }
           }
         }
+      else if (url.pathname === '/x/passport-login/web/qrcode/generate')
+        body = {
+          code: 0,
+          data: {
+            url: 'https://www.bilibili.com/h5/mobile-appeal',
+            qrcode_key: 'qr-key'
+          }
+        }
+      else if (url.pathname === '/x/passport-login/web/qrcode/poll') {
+        if (pollCount++ === 0) body = { code: 0, data: { code: 86090 } }
+        else {
+          body = { code: 0, data: { code: 0 } }
+          headers.push(
+            { name: 'set-cookie', value: 'SESSDATA=sess; Path=/; HttpOnly' },
+            { name: 'set-cookie', value: 'bili_jct=csrf; Path=/; HttpOnly' },
+            { name: 'set-cookie', value: 'DedeUserID=42; Path=/; HttpOnly' }
+          )
+        }
+      } else if (url.pathname === '/x/space/myinfo')
+        body = {
+          code: 0,
+          data: { mid: 42, name: 'Listener', face: '//i0.hdslb.com/avatar.jpg' }
+        }
       else body = { code: 0, data: [] }
       return {
         status: 200,
-        headers: [{ name: 'content-type', value: 'application/json' }],
+        headers,
         body: new TextEncoder().encode(JSON.stringify(body))
       }
     },
@@ -120,8 +147,16 @@ async function component() {
       states.set(key, value)
     },
     credentialRead() {
-      return new Uint8Array()
-    }
+      return credential
+    },
+    credentialPublish(metadata, data) {
+      credential = data
+      published = { metadata: JSON.parse(metadata), credential: new TextDecoder().decode(data) }
+    },
+    credentialReplace(data) {
+      credential = data
+    },
+    credentialInvalidate() {}
   }
   const instance = await instantiate(
     async (path) => WebAssembly.compile(await readFile(resolve(output, path))),
@@ -135,6 +170,7 @@ async function component() {
   return {
     instance,
     requests,
+    published: () => published,
     call(method, request) {
       return JSON.parse(
         instance.call(method, JSON.stringify({ session: { source: 'bilibili' }, request }))
@@ -182,6 +218,38 @@ test('Component search, playback and MV keep signed params and mirror URLs', asy
       playurl.headers.find((header) => header.name === 'User-Agent').value.includes('Edg/'),
       true
     )
+  } finally {
+    fixture.instance.shutdown()
+  }
+})
+
+test('Component QR login publishes the profile with the opaque cookie through Host', async () => {
+  const fixture = await component()
+  try {
+    const challenge = fixture.call('music.account', {
+      operation: 'beginLogin',
+      method: 'qr'
+    })
+    assert.equal(challenge.status, 'ok', JSON.stringify(challenge))
+    assert.equal(challenge.data.type, 'challenge')
+    assert.equal(challenge.data.data.key, 'qr-key')
+    const waiting = fixture.call('music.account', {
+      operation: 'pollLogin',
+      key: 'qr-key'
+    })
+    assert.equal(waiting.data.data.code, 802)
+    const success = fixture.call('music.account', {
+      operation: 'pollLogin',
+      key: 'qr-key'
+    })
+    assert.equal(success.data.data.code, 803)
+    const result = fixture.published()
+    assert.equal(result.metadata.reference.id, '42')
+    assert.match(result.credential, /SESSDATA=sess/)
+    assert.match(result.credential, /bili_jct=csrf/)
+    const profile = fixture.call('music.account', { operation: 'profile' })
+    assert.equal(profile.status, 'ok', JSON.stringify(profile))
+    assert.equal(profile.data.data.displayName, 'Listener')
   } finally {
     fixture.instance.shutdown()
   }

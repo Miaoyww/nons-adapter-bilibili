@@ -3,10 +3,11 @@
   "descriptor": {
     "source": "bilibili",
     "displayName": "哔哩哔哩",
-    "description": "搜索并播放哔哩哔哩视频音轨，可为歌曲查找和播放 MV。",
+    "description": "扫码登录哔哩哔哩，搜索并播放视频音轨，可为歌曲查找和播放 MV。",
     "contractVersion": 1,
     "platforms": ["bilibili"],
-    "capabilities": ["search", "mv"],
+    "loginMethods": [{ "id": "qr", "label": "扫码登录" }],
+    "capabilities": ["search", "mv", "account"],
     "coverHosts": ["*.hdslb.com", "*.biliimg.com"],
     "shareLinkTemplates": {
       "track": "https://www.bilibili.com/video/{id}"
@@ -15,6 +16,7 @@
   "permissions": {
     "httpHosts": [
       "api.bilibili.com",
+      "passport.bilibili.com",
       "*.hdslb.com",
       "*.biliimg.com",
       "*.bilivideo.com",
@@ -26,6 +28,6 @@
     "websocketHosts": [],
     "system": true,
     "state": true,
-    "credentials": false
+    "credentials": true
   }
 }

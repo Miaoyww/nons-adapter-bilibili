@@ -11,7 +11,7 @@ wit_bindgen::generate!({
 
 struct Component;
 struct Transport;
-thread_local! { static ADAPTER: RefCell<Adapter> = RefCell::new(Adapter); }
+thread_local! { static ADAPTER: RefCell<Adapter> = RefCell::new(Adapter::default()); }
 use nons::host::transport;
 
 impl Host for Transport {
@@ -62,6 +62,18 @@ impl Host for Transport {
         transport::credential_read()
             .map_err(|error| crate::model::Error::host(&error, "host.credential-read"))
     }
+    fn credential_publish(&self, metadata: &str, data: &[u8]) -> AdapterResult<()> {
+        transport::credential_publish(metadata, data)
+            .map_err(|error| crate::model::Error::host(&error, "host.credential-publish"))
+    }
+    fn credential_replace(&self, data: &[u8]) -> AdapterResult<()> {
+        transport::credential_replace(data)
+            .map_err(|error| crate::model::Error::host(&error, "host.credential-replace"))
+    }
+    fn credential_invalidate(&self) -> AdapterResult<()> {
+        transport::credential_invalidate()
+            .map_err(|error| crate::model::Error::host(&error, "host.credential-invalidate"))
+    }
     fn diagnostic(&self, stage: &str, class: &str, code: &str) {
         let _ = nons::plugin::host::call(
             "diagnostic.report",
@@ -78,7 +90,7 @@ impl Guest for Component {
         Ok(())
     }
     fn call(method: String, args: String) -> std::result::Result<String, String> {
-        Ok(ADAPTER.with(|adapter| adapter.borrow().call(&Transport, &method, &args)))
+        Ok(ADAPTER.with(|adapter| adapter.borrow_mut().call(&Transport, &method, &args)))
     }
 }
 export!(Component);
