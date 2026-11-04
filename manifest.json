@@ -23,7 +23,8 @@
       "*.bilivideo.cn",
       "*.bilivideo.net",
       "*.akamaized.net",
-      "*.szbdyd.com"
+      "*.szbdyd.com",
+      "*.mountaintoys.cn"
     ],
     "websocketHosts": [],
     "system": true,
