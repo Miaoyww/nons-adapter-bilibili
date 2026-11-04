@@ -69,6 +69,10 @@ impl Adapter {
         }
         let input: Value = serde_json::from_str(args)
             .map_err(|_| model::Error::new("invalidData", "transport.args-json"))?;
+        // 登录靠 HTTP 轮询，运行时事件无 session 包装，只需维持会话存活。
+        if method == "runtime:event" {
+            return Ok(Value::Null);
+        }
         if input["session"]["source"] != "bilibili" {
             return Err(model::Error::new("permissionDenied", "transport.source"));
         }

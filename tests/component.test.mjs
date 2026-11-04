@@ -226,6 +226,10 @@ test('Component search, playback and MV keep signed params and mirror URLs', asy
 test('Component QR login publishes the profile with the opaque cookie through Host', async () => {
   const fixture = await component()
   try {
+    const tick = JSON.parse(
+      fixture.instance.call('runtime:event', JSON.stringify({ kind: 'tick' }))
+    )
+    assert.deepEqual(tick, { status: 'ok', data: null })
     const challenge = fixture.call('music.account', {
       operation: 'beginLogin',
       method: 'qr'
