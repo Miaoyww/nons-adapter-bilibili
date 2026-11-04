@@ -528,6 +528,44 @@ pub fn read_track(host: &impl Host, reference: &Value) -> Result<Value> {
     Ok(track(&value, reference, cid))
 }
 
+fn bracketed_title(value: &str) -> &str {
+    for (open, close) in [('《', '》'), ('「', '」')] {
+        if let Some(start) = value.find(open) {
+            let rest = &value[start + open.len_utf8()..];
+            if let Some(end) = rest.find(close) {
+                let inner = rest[..end].trim();
+                if !inner.is_empty() {
+                    return inner;
+                }
+            }
+        }
+    }
+    value.trim()
+}
+
+pub fn lyric_match(host: &impl Host, request: &Value) -> Result<Value> {
+    let id = check_reference(&request["track"]["reference"], "track")?;
+    let (bvid, explicit) =
+        parse_video_id(id).ok_or_else(|| Error::new("invalidData", "lyric.video-id"))?;
+    let cid = match explicit {
+        Some(cid) => cid,
+        None => cid(host, bvid, None)?,
+    };
+    let params = signed(
+        host,
+        BTreeMap::from([("bvid", bvid.to_owned()), ("cid", cid.to_string())]),
+    )?;
+    let value = envelope(
+        get(host, "/x/player/wbi/v2", &params, headers(host, &[]))?,
+        false,
+    )?;
+    let title = text(&value["bgm_info"]["music_title"]);
+    if title.is_empty() {
+        return Err(Error::new("notFound", "lyric.bgm-title"));
+    }
+    Ok(json!({"title": bracketed_title(&title)}))
+}
+
 pub fn search_tracks(host: &impl Host, request: &Value) -> Result<Value> {
     let query = request["keyword"].as_str().unwrap_or("");
     let state = page(&request["page"], format!("search:track:{query}"))?;

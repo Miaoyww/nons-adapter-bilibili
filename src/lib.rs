@@ -93,6 +93,7 @@ impl Adapter {
             "music.resolve-playback" => api::resolve_playback(host, request),
             "music.search-mvs" => api::search_mvs(host, request),
             "music.resolve-mv" => api::resolve_mv(host, request),
+            "music.lyric-match" => api::lyric_match(host, request),
             _ => Err(model::Error::new("unsupported", "transport.method")),
         }
     }

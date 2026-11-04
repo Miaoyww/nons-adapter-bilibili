@@ -110,6 +110,11 @@ async function component() {
             }
           }
         }
+      else if (url.pathname === '/x/player/wbi/v2')
+        body = {
+          code: 0,
+          data: { bgm_info: { music_id: 7, music_title: '《晴天》官方 MV' } }
+        }
       else if (url.pathname === '/x/passport-login/web/qrcode/generate')
         body = {
           code: 0,
@@ -254,6 +259,23 @@ test('Component QR login publishes the profile with the opaque cookie through Ho
     const profile = fixture.call('music.account', { operation: 'profile' })
     assert.equal(profile.status, 'ok', JSON.stringify(profile))
     assert.equal(profile.data.data.displayName, 'Listener')
+  } finally {
+    fixture.instance.shutdown()
+  }
+})
+
+test('Component lyric match extracts the BGM song title', async () => {
+  const fixture = await component()
+  try {
+    const result = fixture.call('music.lyric-match', {
+      track: { reference: { source: 'bilibili', kind: 'track', id: 'BV1xx411c7mD:42' } }
+    })
+    assert.equal(result.status, 'ok', JSON.stringify(result))
+    assert.equal(result.data.title, '晴天')
+    assert.match(
+      fixture.requests.find((request) => request.url.includes('/x/player/wbi/v2')).url,
+      /w_rid=/
+    )
   } finally {
     fixture.instance.shutdown()
   }

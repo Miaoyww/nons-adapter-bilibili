@@ -7,7 +7,7 @@
     "contractVersion": 1,
     "platforms": ["bilibili"],
     "loginMethods": [{ "id": "qr", "label": "扫码登录" }],
-    "capabilities": ["search", "mv", "account"],
+    "capabilities": ["search", "mv", "account", "lyricMatch"],
     "coverHosts": ["*.hdslb.com", "*.biliimg.com"],
     "shareLinkTemplates": {
       "track": "https://www.bilibili.com/video/{id}"
