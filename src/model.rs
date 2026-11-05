@@ -108,8 +108,13 @@ pub fn track(value: &Value, requested: &Value, cid_override: Option<u64>) -> Val
         .filter(|_| cid_override.is_some())
         .map_or_else(|| bvid.clone(), |cid| format!("{bvid}:{cid}"));
     let owner = &value["owner"];
-    let artist = text(first(owner, &["name", "uname"]));
-    let mid = integer(first(owner, &["mid", "uid"]));
+    let owner_name = text(first(owner, &["name", "uname"]));
+    let artist = if owner_name.is_empty() {
+        text(&value["author"])
+    } else {
+        owner_name
+    };
+    let mid = integer(first(owner, &["mid", "uid"])).or_else(|| integer(&value["mid"]));
     let artist_reference = mid.map(|mid| reference("artist", &mid.to_string()));
     json!({
         "reference": if requested.is_null() { reference("track", &id) } else { requested.clone() },
@@ -274,6 +279,35 @@ mod tests {
         );
         assert_eq!(duration_text(&json!("3:15")), 195_000);
         assert_eq!(duration_text(&json!("61:01")), 3_661_000);
+    }
+
+    #[test]
+    fn maps_video_author_to_artist_when_owner_is_absent() {
+        let value = json!({
+            "bvid":"BV1xx411c7mD",
+            "title":"晴天",
+            "author":"联合投稿作者",
+            "mid":7,
+            "duration":"3:15"
+        });
+        let track = track(&value, &Value::Null, None);
+        assert_eq!(track["artist"], "联合投稿作者");
+        assert_eq!(track["artists"][0]["name"], "联合投稿作者");
+        assert_eq!(track["artists"][0]["reference"]["id"], "7");
+    }
+
+    #[test]
+    fn owner_name_takes_precedence_over_author() {
+        let value = json!({
+            "bvid":"BV1xx411c7mD",
+            "title":"晴天",
+            "author":"搜索作者",
+            "mid":7,
+            "owner":{"mid":8,"name":"视频作者"}
+        });
+        let track = track(&value, &Value::Null, None);
+        assert_eq!(track["artist"], "视频作者");
+        assert_eq!(track["artists"][0]["reference"]["id"], "8");
     }
 
     #[test]

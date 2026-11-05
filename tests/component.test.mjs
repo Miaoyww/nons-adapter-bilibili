@@ -197,6 +197,10 @@ test('Component search, playback and MV keep signed params and mirror URLs', asy
     assert.equal(tracker.data.data.items.length, 1)
     assert.equal(tracker.data.data.items[0].reference.id, 'BV1xx411c7mD')
     assert.equal(tracker.data.data.items[0].title, '晴天')
+    assert.equal(tracker.data.data.items[0].artist, 'UP')
+    assert.deepEqual(tracker.data.data.items[0].artists, [
+      { name: 'UP', reference: { source: 'bilibili', kind: 'artist', id: '7' } }
+    ])
 
     const audio = fixture.call('music.resolve-playback', {
       track: tracker.data.data.items[0].reference,

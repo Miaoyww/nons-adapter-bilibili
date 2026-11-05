@@ -2,7 +2,7 @@
 
 来源 `bilibili`，以 Rust 实现并编译为 WASM Component。网络、WBI 密钥缓存和诊断经通用 Host 访问。
 
-提供二维码登录、视频搜索、音轨播放解析和 MV 搜索/解析，尚未接入音乐库。Cookie 作为不透明凭据交给 AccountManager 统一保存，登录后搜索和 playurl 自动携带；资料校验失败会撤销当前本地会话。Bilibili 视频作为曲目来源使用稳定的 BV 号；MV 是独立 `mv` 引用，不改写歌曲身份。声明 `lyricMatch` 后从 `/x/player/wbi/v2` 的 `bgm_info.music_title` 提取歌曲名，供宿主歌词服务匹配；缺少 BGM 信息时由宿主回退视频标题。
+提供二维码登录、视频搜索、音轨播放解析和 MV 搜索/解析，尚未接入音乐库。Cookie 作为不透明凭据交给 AccountManager 统一保存，登录后搜索和 playurl 自动携带；资料校验失败会撤销当前本地会话。Bilibili 视频作为曲目来源使用稳定的 BV 号；搜索与详情将视频作者映射为曲目艺术家，联合作者沿用接口返回的作者文本；MV 是独立 `mv` 引用，不改写歌曲身份。声明 `lyricMatch` 后从 `/x/player/wbi/v2` 的 `bgm_info.music_title` 提取歌曲名，供宿主歌词服务匹配；缺少 BGM 信息时由宿主回退视频标题。
 
 协议层对照 `BBPlayer` 的 Web API 实现：固定 `api.bilibili.com`，统一 Cookie、移动端 UA、`Referer`、`Origin`，解 `{code,message,data}` 信封；WBI 使用同序参数过滤、编码、MD5、`wts` 和 `w_rid`，密钥从 `/x/web-interface/nav` 提取并按日保存在适配器状态。playurl 使用 `fnval=4048`、`qlt`、`voice_balance=1` 和桌面浏览器 UA，保留同音质 `backup_url`。音频优先级为 Dolby、Hi-Res、指定音质、最高音质、旧视频 `durl`；MV 在 DASH 视频中优先 AVC 1080p，再退到最高可用编码。
 
