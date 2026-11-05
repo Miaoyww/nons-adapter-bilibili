@@ -6,10 +6,20 @@
 
 协议层对照 `BBPlayer` 的 Web API 实现：固定 `api.bilibili.com`，统一 Cookie、移动端 UA、`Referer`、`Origin`，解 `{code,message,data}` 信封；WBI 使用同序参数过滤、编码、MD5、`wts` 和 `w_rid`，密钥从 `/x/web-interface/nav` 提取并按日保存在适配器状态。playurl 使用 `fnval=4048`、`qlt`、`voice_balance=1` 和桌面浏览器 UA，保留同音质 `backup_url`。音频优先级为 Dolby、Hi-Res、指定音质、最高音质、旧视频 `durl`；MV 在 DASH 视频中优先 AVC 1080p，再退到最高可用编码。
 
+## 契约
+
+清单使用契约版本 `2`，Host transport 使用 `nons:host/transport@1.1.0`。清单不再声明 `descriptor.coverHosts`、`permissions.httpHosts` 或 `permissions.websocketHosts`，网络访问由 Host 负责。
+
+平台 HTTP 的 `timeout-ms` 统一传 `0`，由 Host 采用不设截止时间的默认行为；显式正数也不会被适配器改写。请求固定 `follow_redirects = true`，响应保留 Host 返回的最终 `url`。
+
+不再限制调用 JSON 参数和回复总大小为 64KiB；分页、签名和音质等平台单字段限制保留。
+
+构建复制主仓 WIT 后会把 host 包版本归一为 `1.1.0`，并幂等补齐 redirect 和响应 URL 字段；字段已存在时不改写。
+
 ## 构建
 
 ```powershell
-$env:NONS_ROOT = 'C:\Projects\NonsPlayersProject\Nons'
+$env:NONS_ROOT = (Resolve-Path '..\..\..\Nons').Path
 node scripts/build.mjs
 ```
 
@@ -18,7 +28,8 @@ node scripts/build.mjs
 ## 测试
 
 ```powershell
-cargo test
+npm ci
+cargo test --locked
 node scripts/build.mjs
 node --test tests/component.test.mjs
 ```

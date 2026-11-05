@@ -12,11 +12,14 @@ const PASSPORT: &str = "https://passport.bilibili.com";
 const API: &str = "https://api.bilibili.com";
 
 fn cookie(host: &impl Host) -> String {
-    host.credential_read()
-        .ok()
-        .filter(|value| !value.is_empty())
-        .and_then(|value| String::from_utf8(value).ok())
-        .unwrap_or_default()
+    let value = match host.credential_read() {
+        Ok(value) => value,
+        Err(error) => {
+            host.diagnostic(&error.stage, "recovered", &error.code);
+            return String::new();
+        }
+    };
+    String::from_utf8(value).unwrap_or_default()
 }
 
 fn headers(host: &impl Host, overrides: &[(&str, &str)]) -> Vec<(String, String)> {
@@ -43,12 +46,12 @@ fn get(
     } else {
         format!("https://api.bilibili.com{endpoint}?{query}")
     };
-    let reply = host.http("GET", &url, headers, vec![], 10_000)?;
+    let reply = host.http("GET", &url, headers, vec![], true, 0)?;
     response(reply.status, &reply.body)
 }
 
 fn raw_get(host: &impl Host, url: &str, headers: Vec<(String, String)>) -> Result<crate::Response> {
-    host.http("GET", url, headers, vec![], 10_000)
+    host.http("GET", url, headers, vec![], true, 0)
 }
 
 pub fn prepare_login(request: &Value) -> Result<()> {
@@ -122,11 +125,13 @@ fn profile(host: &impl Host, cookie_override: Option<&str>) -> Result<Option<Val
     let value = response(reply.status, &reply.body)?;
     let code = value["code"].as_i64().unwrap_or(-1);
     if code == -101 {
-        let _ = host.credential_invalidate();
+        if let Err(error) = host.credential_invalidate() {
+            host.diagnostic(&error.stage, "recovered", &error.code);
+        }
         return Ok(None);
     }
     let data = envelope(value, false)?;
-    if !integer(&data["mid"]).is_some_and(|mid| mid > 0) {
+    if integer(&data["mid"]).is_none_or(|mid| mid == 0) {
         return Ok(None);
     }
     Ok(Some(data))
@@ -304,9 +309,18 @@ fn first_cid(host: &impl Host, bvid: &str) -> Result<u64> {
 }
 
 fn cid(host: &impl Host, bvid: &str, explicit: Option<u64>) -> Result<u64> {
-    explicit
-        .or_else(|| integer(&view(host, bvid).ok()?["cid"]))
-        .map_or_else(|| first_cid(host, bvid), Ok)
+    if let Some(cid) = explicit {
+        return Ok(cid);
+    }
+    match view(host, bvid) {
+        Ok(value) => {
+            if let Some(cid) = integer(&value["cid"]) {
+                return Ok(cid);
+            }
+        }
+        Err(error) => host.diagnostic(&error.stage, "recovered", &error.code),
+    }
+    first_cid(host, bvid)
 }
 
 fn stream_item(value: &Value) -> Option<(String, Vec<String>)> {
@@ -621,6 +635,8 @@ mod tests {
     #[derive(Default)]
     struct Fixture {
         responses: RefCell<Vec<Reply>>,
+        timeouts: RefCell<Vec<u32>>,
+        redirects: RefCell<Vec<bool>>,
         state: RefCell<BTreeMap<String, String>>,
         credential: RefCell<Vec<u8>>,
         published: RefCell<Option<(String, Vec<u8>)>>,
@@ -642,16 +658,20 @@ mod tests {
         fn http(
             &self,
             _: &str,
-            _: &str,
+            url: &str,
             _: Vec<(String, String)>,
             _: Vec<u8>,
-            _: u32,
+            follow_redirects: bool,
+            timeout_ms: u32,
         ) -> Result<Response> {
+            self.timeouts.borrow_mut().push(timeout_ms);
+            self.redirects.borrow_mut().push(follow_redirects);
             let reply = self.responses.borrow_mut().remove(0);
             Ok(Response {
                 status: reply.status,
                 headers: reply.headers,
                 body: reply.value.to_string().into_bytes(),
+                url: url.into(),
             })
         }
         fn now_ms(&self) -> u64 {
@@ -824,5 +844,16 @@ mod tests {
             login_cookie(&headers[..1]).unwrap_err().code,
             "unauthenticated"
         );
+    }
+
+    #[test]
+    fn platform_requests_leave_the_timeout_to_the_host() {
+        let host = Fixture::default();
+        host.responses
+            .borrow_mut()
+            .push(reply(envelope(json!({"bvid":"BV1xx411c7mD"}))));
+        view(&host, "BV1xx411c7mD").unwrap();
+        assert_eq!(*host.timeouts.borrow(), [0]);
+        assert_eq!(*host.redirects.borrow(), [true]);
     }
 }

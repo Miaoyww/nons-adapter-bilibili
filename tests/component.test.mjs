@@ -142,6 +142,7 @@ async function component() {
       return {
         status: 200,
         headers,
+        url: request.url,
         body: new TextEncoder().encode(JSON.stringify(body))
       }
     },

@@ -4,7 +4,7 @@ use std::cell::RefCell;
 
 wit_bindgen::generate!({
     path: ["generated-wit/plugin.wit", "generated-wit/host.wit", "interfaces/wasi-clocks", "interfaces/wasi-random"],
-    inline: "package nons:bilibili; world adapter { import nons:host/transport@1.0.0; import nons:plugin/host@1.0.0; import wasi:clocks/wall-clock@0.2.0; import wasi:random/random@0.2.0; export initialize: func() -> result<_, string>; export shutdown: func() -> result<_, string>; export call: func(method: string, args: string) -> result<string, string>; }",
+    inline: "package nons:bilibili; world adapter { import nons:host/transport@1.1.0; import nons:plugin/host@1.0.0; import wasi:clocks/wall-clock@0.2.0; import wasi:random/random@0.2.0; export initialize: func() -> result<_, string>; export shutdown: func() -> result<_, string>; export call: func(method: string, args: string) -> result<string, string>; }",
     world: "nons:bilibili/adapter",
     generate_all,
 });
@@ -21,6 +21,7 @@ impl Host for Transport {
         url: &str,
         headers: Vec<(String, String)>,
         body: Vec<u8>,
+        follow_redirects: bool,
         timeout_ms: u32,
     ) -> AdapterResult<Response> {
         let response = transport::http_request(&transport::Request {
@@ -31,7 +32,8 @@ impl Host for Transport {
                 .map(|(name, value)| transport::Header { name, value })
                 .collect(),
             body,
-            timeout_ms: timeout_ms.clamp(1, 15000),
+            follow_redirects,
+            timeout_ms,
         })
         .map_err(|error| crate::model::Error::host(&error, "host.http"))?;
         Ok(Response {
@@ -42,6 +44,7 @@ impl Host for Transport {
                 .map(|header| (header.name, header.value))
                 .collect(),
             body: response.body,
+            url: response.url,
         })
     }
     fn now_ms(&self) -> u64 {

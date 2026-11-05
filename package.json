@@ -1,10 +1,11 @@
 {
   "name": "@nons/adapter-bilibili",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "test": "cargo test --manifest-path Cargo.toml && node --test tests/component.test.mjs"
+    "test": "cargo test --manifest-path Cargo.toml --locked && node --test tests/component.test.mjs"
   },
   "license": "MIT"
 }

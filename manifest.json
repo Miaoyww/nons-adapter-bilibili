@@ -1,32 +1,18 @@
 {
-  "version": "0.1.0",
+  "version": "1.0.0",
   "descriptor": {
     "source": "bilibili",
     "displayName": "哔哩哔哩",
     "description": "扫码登录哔哩哔哩，搜索并播放视频音轨，可为歌曲查找和播放 MV。",
-    "contractVersion": 1,
+    "contractVersion": 2,
     "platforms": ["bilibili"],
     "loginMethods": [{ "id": "qr", "label": "扫码登录" }],
     "capabilities": ["search", "mv", "account", "lyricMatch"],
-    "coverHosts": ["*.hdslb.com", "*.biliimg.com"],
     "shareLinkTemplates": {
       "track": "https://www.bilibili.com/video/{id}"
     }
   },
   "permissions": {
-    "httpHosts": [
-      "api.bilibili.com",
-      "passport.bilibili.com",
-      "*.hdslb.com",
-      "*.biliimg.com",
-      "*.bilivideo.com",
-      "*.bilivideo.cn",
-      "*.bilivideo.net",
-      "*.akamaized.net",
-      "*.szbdyd.com",
-      "*.mountaintoys.cn"
-    ],
-    "websocketHosts": [],
     "system": true,
     "state": true,
     "credentials": true
