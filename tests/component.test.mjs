@@ -30,9 +30,13 @@ const { instantiate } = await import(pathToFileURL(resolve(output, 'adapter.comp
 const { WASIShim } = await import(
   pathToFileURL(resolve(tools, 'preview2-shim/dist/common/instantiation.js')).href
 )
+const LONG_TITLE = '晴'.repeat(70_000)
+const FINAL_URL = 'https://user:secret@127.0.0.1:8443/final?token=redirected'
 
 async function component() {
   const requests = []
+  const timeouts = []
+  const redirects = []
   const states = new Map()
   let credential = new Uint8Array()
   let published
@@ -40,9 +44,18 @@ async function component() {
   const transport = {
     httpRequest(request) {
       requests.push(request)
+      timeouts.push(request.timeoutMs)
+      redirects.push(request.followRedirects)
       const url = new URL(request.url)
       let body
       const headers = [{ name: 'content-type', value: 'application/json' }]
+      if (url.pathname === '/start')
+        return {
+          status: 200,
+          headers,
+          url: FINAL_URL,
+          body: new TextEncoder().encode('{}')
+        }
       if (url.pathname === '/x/web-interface/nav')
         body = {
           code: -101,
@@ -64,8 +77,8 @@ async function component() {
               {
                 type: 'video',
                 bvid: 'BV1xx411c7mD',
-                title: '<em class="keyword">晴天</em>',
-                pic: '//i0.hdslb.com/bfs/archive/cover.jpg',
+                title: `<em class="keyword">晴天</em>${LONG_TITLE}`,
+                pic: 'https://user:secret@192.168.1.10:8443/archive/cover.jpg?token=public',
                 author: 'UP',
                 duration: '3:15',
                 mid: 7
@@ -95,8 +108,10 @@ async function component() {
               audio: [
                 {
                   id: 30280,
-                  base_url: 'https://upos.example/audio.m4s',
-                  backup_url: ['https://backup.example/audio.m4s']
+                  base_url: 'https://user:secret@192.168.1.10:8443/audio.m4s?token=audio',
+                  backup_url: [
+                    'https://backup:secret@192.168.1.11:9443/audio.m4s?token=backup'
+                  ]
                 }
               ],
               video: [
@@ -176,6 +191,8 @@ async function component() {
   return {
     instance,
     requests,
+    timeouts,
+    redirects,
     published: () => published,
     call(method, request) {
       return JSON.parse(
@@ -197,11 +214,16 @@ test('Component search, playback and MV keep signed params and mirror URLs', asy
     assert.equal(tracker.status, 'ok', JSON.stringify(tracker))
     assert.equal(tracker.data.data.items.length, 1)
     assert.equal(tracker.data.data.items[0].reference.id, 'BV1xx411c7mD')
-    assert.equal(tracker.data.data.items[0].title, '晴天')
+    assert.ok(tracker.data.data.items[0].title.startsWith('晴天'))
+    assert.ok(tracker.data.data.items[0].title.length > 64 * 1024)
     assert.equal(tracker.data.data.items[0].artist, 'UP')
     assert.deepEqual(tracker.data.data.items[0].artists, [
       { name: 'UP', reference: { source: 'bilibili', kind: 'artist', id: '7' } }
     ])
+    assert.equal(
+      tracker.data.data.items[0].cover.original,
+      'https://user:secret@192.168.1.10:8443/archive/cover.jpg?token=public'
+    )
 
     const audio = fixture.call('music.resolve-playback', {
       track: tracker.data.data.items[0].reference,
@@ -209,7 +231,13 @@ test('Component search, playback and MV keep signed params and mirror URLs', asy
       allowDowngrade: true
     })
     assert.equal(audio.status, 'ok', JSON.stringify(audio))
-    assert.deepEqual(audio.data.backupUrls, ['https://backup.example/audio.m4s'])
+    assert.equal(
+      audio.data.url,
+      'https://user:secret@192.168.1.10:8443/audio.m4s?token=audio'
+    )
+    assert.deepEqual(audio.data.backupUrls, [
+      'https://backup:secret@192.168.1.11:9443/audio.m4s?token=backup'
+    ])
 
     const mvs = fixture.call('music.search-mvs', {
       track: { title: '晴天', artists: ['周杰伦'], durationMs: 195000 },
@@ -228,6 +256,50 @@ test('Component search, playback and MV keep signed params and mirror URLs', asy
       playurl.headers.find((header) => header.name === 'User-Agent').value.includes('Edg/'),
       true
     )
+    for (const request of fixture.requests) {
+      assert.equal(request.method, 'GET')
+      assert.equal(request.body.length, 0)
+      assert.equal(request.followRedirects, true)
+    }
+    assert.equal(fixture.timeouts.length, fixture.requests.length)
+    assert.ok(fixture.timeouts.every((timeout) => timeout === 0))
+  } finally {
+    fixture.instance.shutdown()
+  }
+})
+
+test('Component forwards an explicit timeout and the resolved response URL', async () => {
+  const fixture = await component()
+  try {
+    const url = 'https://user:secret@127.0.0.1:8080/start?token=origin'
+    const count = fixture.requests.length
+    const result = fixture.call('runtime:test-http', { url, timeoutMs: 60_000 })
+    assert.equal(result.status, 'ok', JSON.stringify(result))
+    assert.equal(result.data.url, FINAL_URL)
+    assert.equal(fixture.requests.length, count + 1)
+    assert.equal(fixture.timeouts.at(-1), 60_000)
+    assert.equal(fixture.redirects.at(-1), true)
+    assert.equal(fixture.requests.at(-1).url, url)
+  } finally {
+    fixture.instance.shutdown()
+  }
+})
+
+test('Component accepts transport arguments larger than the old 64KiB limit', async () => {
+  const fixture = await component()
+  try {
+    const args = JSON.stringify({
+      session: { source: 'bilibili' },
+      request: {
+        operation: 'search',
+        kind: 'track',
+        keyword: '晴'.repeat(70_000),
+        page: { limit: 20, cursor: null }
+      }
+    })
+    assert.ok(args.length > 64 * 1024)
+    const result = JSON.parse(fixture.instance.call('music.business', args))
+    assert.equal(result.status, 'ok', JSON.stringify(result).slice(0, 200))
   } finally {
     fixture.instance.shutdown()
   }
